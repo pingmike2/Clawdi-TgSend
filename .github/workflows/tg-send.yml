@@ -16,7 +16,8 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write
+  actions: write
 
 concurrency:
   group: Tg_Send
@@ -25,6 +26,7 @@ concurrency:
 env:
   PRIVATE_REPO: pingmike2/clawdi-send
   PROJECT_DIR: clawdi-send
+  KEEPALIVE_FILE: time.txt
   TG_TARGET: ${{ vars.TG_TARGET || 'ClawdiAgent1Bot' }}
   TG_MSG_TEXT: ${{ vars.TG_MSG_TEXT || '纯测试，现在北京时间 {time}' }}
   TG_TIME_FMT: ${{ vars.TG_TIME_FMT || '%Y-%m-%d %H:%M:%S' }}
@@ -53,7 +55,7 @@ jobs:
           TG_SESSION: ${{ secrets.TG_SESSION }}
         run: |
           python3 - <<'PY'
-          import os, sys
+          import os
           missing = [k for k in ("TG_API_ID", "TG_API_HASH", "TG_SESSION") if not os.environ.get(k, "").strip()]
           if missing:
               raise SystemExit(f"缺少 Secrets: {', '.join(missing)}")
@@ -74,14 +76,64 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt -q
+          # 代理带认证时需要 python-socks；requests 用于报告推送
+          pip install python-socks requests -q
 
       - name: 发送消息
+        id: send
         working-directory: ${{ env.PROJECT_DIR }}
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
+          TG_PROXY: ${{ secrets.TG_PROXY }}
+          REPORT_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN }}
+          REPORT_CHAT_ID: ${{ secrets.REPORT_CHAT_ID }}
           TG_TARGET: ${{ inputs.tg_target != '' && inputs.tg_target || env.TG_TARGET }}
           TG_MSG_TEXT: ${{ inputs.tg_msg_text != '' && inputs.tg_msg_text || env.TG_MSG_TEXT }}
           TG_TIME_FMT: ${{ env.TG_TIME_FMT }}
-        run: python3 -u tg_send.py
+        run: |
+          set +e
+          python3 -u tg_send.py
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0   # 保活步骤永远执行，失败状态由保活文件和 summary 呈现
+
+      - name: 🕒 更新时间
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "$(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M:%S')" > time.txt
+          git add time.txt
+          if git diff --cached --quiet; then
+            echo "No need to commit"
+          else
+            git commit -m "⏱️ Auto Update by Github Actions $(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M:%S')"
+            git push origin main
+          fi
+
+      - name: 🧹 清理旧的工作流运行记录
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh run list --workflow="$(github.workflow}}" --limit=100 --json databaseId --jq '.[].databaseId')
+          count=0
+          for run_id in $runs; do
+            count=$((count + 1))
+            if [ $count -gt 1 ]; then
+              echo "删除运行记录: $run_id"
+              gh run delete $run_id || true
+            fi
+          done
+
+      - name: 结果摘要
+        if: always()
+        run: |
+          if [ "${{ steps.send.outputs.rc }}" = "0" ]; then
+            echo "✅ 消息发送成功" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ 消息发送失败 (rc=${{ steps.send.outputs.rc }})，请检查上方日志" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f time.txt ]; then cat time.txt >> "$GITHUB_STEP_SUMMARY"; fi
