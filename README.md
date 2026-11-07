@@ -18,6 +18,9 @@
 | `TG_TARGET` | Variable | ❌ | 目标 bot 用户名，默认 `ClawdiAgent1Bot` |
 | `TG_MSG_TEXT` | Variable | ❌ | 消息模板，`{time}` 占位符替换为北京时间，默认 `纯测试，现在北京时间 {time}` |
 | `TG_TIME_FMT` | Variable | ❌ | 北京时间格式，默认 `%Y-%m-%d %H:%M:%S` |
+| `TG_PROXY` | Secret | ❌ | Telethon 代理，如 `socks5://host:1080` 或 `socks5://user:pass@host:1080`、`http://host:port`；不填直连 |
+| `REPORT_BOT_TOKEN` | Secret | ❌ | 报告推送用的 Bot Token（与发消息账号分离），不填则不推报告 |
+| `REPORT_CHAT_ID` | Secret | ❌ | 报告接收的 chat id，与上项配套 |
 
 ## 本机生成 TG_SESSION
 
