@@ -79,6 +79,46 @@ jobs:
           # 代理带认证时需要 python-socks；requests 用于报告推送
           pip install python-socks requests -q
 
+      - name: 启动 sing-box 代理（节点协议时）
+        id: singbox
+        if: env.TG_PROXY != ''
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
+          # 判断是否节点协议（vless/vmess/trojan/ss/hy2/tuic/anytls），socks5/http 不经 sing-box
+          if echo "$TG_PROXY" | grep -qiE '^(vless|vmess|trojan|ss|hysteria2|hy2|tuic|anytls)://'; then
+            echo "检测到节点协议，生成 sing-box 配置..."
+            python3 gen_singbox_config.py
+            test -f sing-box_config.json
+            # 安装 sing-box（官方 apt 源）
+            curl -fsSL https://sing-box.app/gpg.key -o /tmp/sb.gpg
+            sudo gpg --dearmor -o /etc/apt/keyrings/sagernet.gpg /tmp/sb.gpg 2>/dev/null || \
+              { sudo mkdir -p /etc/apt/keyrings && sudo gpg --dearmor -o /etc/apt/keyrings/sagernet.gpg /tmp/sb.gpg; }
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/sagernet.gpg] https://deb.sagernet.org/ * *" | sudo tee /etc/apt/sources.list.d/sagernet.list > /dev/null
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sing-box
+            sing-box version
+            # 校验配置 + 前台启动
+            sing-box check -c sing-box_config.json
+            nohup sing-box run -c sing-box_config.json > sing-box.log 2>&1 &
+            echo $! > sing-box.pid
+            sleep 3
+            kill -0 $(cat sing-box.pid) && echo "sing-box 已启动"
+            # 等待端口就绪
+            for i in $(seq 1 15); do
+              if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(('127.0.0.1',10808))==0 else 1)"; then
+                echo "端口 10808 就绪"
+                break
+              fi
+              sleep 1
+            done
+            echo "socks=socks5://127.0.0.1:10808" >> "$GITHUB_OUTPUT"
+            echo "enabled=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "socks5/http 直连代理，跳过 sing-box"
+            echo "enabled=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 发送消息
         id: send
         working-directory: ${{ env.PROJECT_DIR }}
@@ -87,6 +127,7 @@ jobs:
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
           TG_PROXY: ${{ secrets.TG_PROXY }}
+          TG_PROXY_SOCKS: ${{ steps.singbox.outputs.socks }}
           REPORT_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN }}
           REPORT_CHAT_ID: ${{ secrets.REPORT_CHAT_ID }}
           TG_TARGET: ${{ inputs.tg_target != '' && inputs.tg_target || env.TG_TARGET }}
@@ -99,6 +140,15 @@ jobs:
           set -e
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0   # 保活步骤永远执行，失败状态由保活文件和 summary 呈现
+
+      - name: 停止 sing-box
+        if: steps.singbox.outputs.enabled == '1'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ -f sing-box.pid ] && kill -0 $(cat sing-box.pid) 2>/dev/null; then
+            kill $(cat sing-box.pid) && echo "sing-box 已停止"
+          fi
+          tail -5 sing-box.log || true
 
       - name: 🕒 更新时间
         run: |
