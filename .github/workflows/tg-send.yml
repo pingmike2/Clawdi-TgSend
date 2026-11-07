@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PRIVATE_REPO: pingmike2/clawdi-send
+  PRIVATE_REPO: ${{ github.repository_owner }}/clawdi-send
   PROJECT_DIR: clawdi-send
   KEEPALIVE_FILE: time.txt
   TG_TARGET: ${{ vars.TG_TARGET || 'ClawdiAgent1Bot' }}
